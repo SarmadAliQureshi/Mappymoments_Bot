@@ -1,0 +1,24 @@
+# Render Blueprint: free web service running the Next.js server.
+# Secrets are entered in the Render dashboard, not stored here.
+services:
+  - type: web
+    name: mappy-moments-studio
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: SITE_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: NEXT_PUBLIC_MAPBOX_TOKEN
+        sync: false
+      - key: NEXT_PUBLIC_MAPTILER_KEY
+        sync: false
+      - key: NEXT_PUBLIC_THUNDERFOREST_KEY
+        sync: false
+      - key: NEXT_PUBLIC_JAWG_TOKEN
+        sync: false
