@@ -30,6 +30,6 @@ npm run dev
 
 ## Deploy (Render, free plan)
 
-The repo includes `render.yaml`. In Render choose **New → Blueprint**, pick this repository, then enter the environment variables when asked. Render runs `npm ci && npm run build` and `npm start`.
+The repo includes `render.yaml`. In Render choose **New → Blueprint**, pick this repository, then enter the environment variables when asked. Render runs `npm install --include=dev && npm run build` and `npm start`.
 
 On the free plan the service sleeps after about 15 minutes without visits (the next visit takes up to a minute to wake it), and its disk is wiped on every restart, so the Ad Studio library does not last between restarts.

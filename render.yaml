@@ -5,7 +5,7 @@ services:
     name: mappy-moments-studio
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
