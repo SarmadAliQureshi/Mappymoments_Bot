@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
+  { href: "/color-themes", label: "AI Color Themes" },
   { href: "/", label: "Map Studio" },
   { href: "/ad-studio", label: "Ad Studio" },
-  { href: "/color-themes", label: "AI Color Themes" },
 ];
 
 export default function SiteNav() {
