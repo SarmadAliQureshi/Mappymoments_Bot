@@ -2,9 +2,9 @@
 
 Internal tool for the Mappy Moments team, built with Next.js.
 
-- **Map Studio**: real maps (live map tiles, real coordinates) placed on AI-generated product photos, with map styles, colour editing and the three designs (Urban Canvas, Spanning the Distance, Coordinates of Commitment).
-- **Ad Studio**: ad images and short videos of catalogue products from a text prompt, with a saved library.
-- **AI Color Themes**: recolours the base Mapbox style from a text description, with a live preview and JSON download.
+- **Map Studio** (`/map-studio`): real maps (live map tiles, real coordinates) placed on AI-generated product photos, with map styles, colour editing and the three designs (Urban Canvas, Spanning the Distance, Coordinates of Commitment).
+- **Ad Studio** (`/ad-studio`): ad images and short videos of catalogue products from a text prompt, with a saved library.
+- **AI Map Style** (`/color-themes`, the landing page): recolours the base Mapbox style from a text description, with a live preview and JSON download.
 
 ## Run locally
 
@@ -21,7 +21,7 @@ npm run dev
 | Variable | Needed for |
 | --- | --- |
 | `GEMINI_API_KEY` | All AI generation (images, video, prompts, colours). Kept on the server. |
-| `NEXT_PUBLIC_MAPBOX_TOKEN` | Mapbox styles, colour editing and AI Color Themes. |
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | Mapbox styles, colour editing and AI Map Style. |
 | `NEXT_PUBLIC_MAPTILER_KEY`, `NEXT_PUBLIC_THUNDERFOREST_KEY`, `NEXT_PUBLIC_JAWG_TOKEN` | The matching map styles; each is hidden when its key is missing. |
 | `SITE_PASSWORD` | Set this on any public deployment. Everyone is asked for it (any user name). |
 | `DATA_DIR` | Optional folder for the Ad Studio library (default `./data`). |

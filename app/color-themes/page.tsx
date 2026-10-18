@@ -179,7 +179,7 @@ export default function ColorThemesPage() {
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
       <header className="text-center">
         <h1 className="font-serif text-4xl font-bold tracking-tight text-ink sm:text-5xl">
-          AI Color Themes
+          AI Map Style
         </h1>
         <p className="mt-3 text-xs uppercase tracking-[0.25em] text-ink/70 sm:text-sm">
           Describe a palette, get a map style

@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
-  { href: "/color-themes", label: "AI Color Themes" },
-  { href: "/", label: "Map Studio" },
+  { href: "/color-themes", label: "AI Map Style" },
+  { href: "/map-studio", label: "Map Studio" },
   { href: "/ad-studio", label: "Ad Studio" },
 ];
 
@@ -18,8 +18,7 @@ export default function SiteNav() {
     >
       <ul className="mx-auto flex w-full max-w-5xl gap-1 overflow-x-auto px-4 sm:px-6">
         {TABS.map((tab) => {
-          const current =
-            tab.href === "/" ? pathname === "/" : pathname.startsWith(tab.href);
+          const current = pathname.startsWith(tab.href);
           return (
             <li key={tab.href}>
               <Link
