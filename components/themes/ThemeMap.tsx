@@ -16,6 +16,8 @@ export interface MapTarget {
   lat: number;
   lng: number;
   zoom: number;
+  /** [west, south, east, north]: when given, the map fits this area. */
+  bbox?: [number, number, number, number];
 }
 
 interface ThemeMapProps {
@@ -72,6 +74,10 @@ export default function ThemeMap({ style, target }: ThemeMapProps) {
   useEffect(() => {
     targetRef.current = target;
     if (!target) return;
+    if (target.bbox) {
+      mapRef.current?.fitBounds(target.bbox, { padding: 40, maxZoom: 15, duration: 1800 });
+      return;
+    }
     mapRef.current?.flyTo({
       center: [target.lng, target.lat],
       zoom: target.zoom,
