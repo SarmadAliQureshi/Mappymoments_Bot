@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Segmented } from "@/components/PromptInput";
-import ThemeMap from "@/components/themes/ThemeMap";
+import ThemeMap, { type MapTarget } from "@/components/themes/ThemeMap";
 import { loadState, saveState } from "@/lib/persist";
 import {
   BASE_COLORS,
@@ -43,6 +43,33 @@ export default function ColorThemesPage() {
   const [view, setView] = useState<"generated" | "base">("generated");
   const [copied, setCopied] = useState(false);
   const [restored, setRestored] = useState(saved.theme !== null);
+  const [place, setPlace] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [placeError, setPlaceError] = useState<string | null>(null);
+  const [found, setFound] = useState<string | null>(null);
+  const [target, setTarget] = useState<MapTarget | null>(null);
+
+  // Moves the preview to a searched place, using the same place lookup as
+  // Map Studio.
+  async function searchPlace() {
+    const query = place.trim();
+    if (!query || searching) return;
+    setSearching(true);
+    setPlaceError(null);
+    try {
+      const response = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok || typeof data?.lat !== "number") {
+        throw new Error(data?.error ?? "That place could not be found.");
+      }
+      setTarget({ id: Date.now(), lat: data.lat, lng: data.lng, zoom: 12 });
+      setFound([data.name, data.country].filter(Boolean).join(", "));
+    } catch (caught) {
+      setPlaceError(caught instanceof Error ? caught.message : "That place could not be found.");
+    } finally {
+      setSearching(false);
+    }
+  }
 
   useEffect(() => {
     if (restored) return;
@@ -298,8 +325,41 @@ export default function ColorThemesPage() {
             }}
           />
         </div>
+        <form
+          role="search"
+          className="mb-3 flex flex-wrap items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void searchPlace();
+          }}
+        >
+          <input
+            type="search"
+            value={place}
+            maxLength={200}
+            onChange={(event) => setPlace(event.target.value)}
+            placeholder="Search a place, e.g. Lahore or Lake Como"
+            aria-label="Search a place to show on the map"
+            className="min-w-0 flex-1 rounded-xl border border-tobacco/25 bg-offwhite px-4 py-2.5 text-sm text-ink placeholder:text-ink/40 focus:border-terracotta focus:outline-none focus:ring-2 focus:ring-terracotta/25"
+          />
+          <button
+            type="submit"
+            disabled={searching || !place.trim()}
+            className={secondaryButton}
+          >
+            {searching ? "Searching…" : "Go"}
+          </button>
+          {(placeError || found) && (
+            <p
+              role={placeError ? "alert" : "status"}
+              className={`w-full text-sm ${placeError ? "text-terracotta" : "text-ink/70"}`}
+            >
+              {placeError ?? `Showing ${found}.`}
+            </p>
+          )}
+        </form>
         <div className="relative">
-          <ThemeMap style={shownStyle} />
+          <ThemeMap style={shownStyle} target={target} />
           {busy && (
             <div
               role="status"

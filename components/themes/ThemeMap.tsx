@@ -10,15 +10,26 @@ import { MAPBOX_TOKEN } from "@/lib/tileStyles";
 // all in view, so every kind of feature can be checked.
 const START = { center: [73.085, 33.715] as [number, number], zoom: 11.2 };
 
+/** A place to move the map to; a new `id` moves it even to the same place. */
+export interface MapTarget {
+  id: number;
+  lat: number;
+  lng: number;
+  zoom: number;
+}
+
 interface ThemeMapProps {
   style: MapStyle;
+  target?: MapTarget | null;
 }
 
 /** An interactive Mapbox GL map that redraws whenever `style` changes. */
-export default function ThemeMap({ style }: ThemeMapProps) {
+export default function ThemeMap({ style, target }: ThemeMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapboxMap | null>(null);
   const styleRef = useRef(style);
+  // Applied once the map exists if a search finishes before it has loaded.
+  const targetRef = useRef(target);
   const [zoom, setZoom] = useState(START.zoom);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +43,12 @@ export default function ThemeMap({ style }: ThemeMapProps) {
       map = new mapboxgl.Map({
         container: containerRef.current,
         style: styleRef.current as never,
-        ...START,
+        ...(targetRef.current
+          ? {
+              center: [targetRef.current.lng, targetRef.current.lat] as [number, number],
+              zoom: targetRef.current.zoom,
+            }
+          : START),
         projection: "mercator",
         attributionControl: true,
       });
@@ -52,6 +68,17 @@ export default function ThemeMap({ style }: ThemeMapProps) {
       mapRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    targetRef.current = target;
+    if (!target) return;
+    mapRef.current?.flyTo({
+      center: [target.lng, target.lat],
+      zoom: target.zoom,
+      duration: 1800,
+      essential: true,
+    });
+  }, [target]);
 
   useEffect(() => {
     styleRef.current = style;
