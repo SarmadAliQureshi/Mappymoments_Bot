@@ -23,10 +23,38 @@ export interface MapTarget {
 interface ThemeMapProps {
   style: MapStyle;
   target?: MapTarget | null;
+  /** SVG textures the style refers to by name, drawn into the map. */
+  images?: Record<string, string>;
+}
+
+// Sprite images are drawn at twice their size, as Mapbox does for SVGs, so a
+// texture appears at its nominal size on screen.
+const PIXEL_RATIO = 2;
+
+function rasterise(svg: string): Promise<ImageData> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * PIXEL_RATIO));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * PIXEL_RATIO));
+      const context = canvas.getContext("2d");
+      URL.revokeObjectURL(url);
+      if (!context) return reject(new Error("This browser cannot draw the texture."));
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(context.getImageData(0, 0, canvas.width, canvas.height));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("A texture SVG could not be drawn."));
+    };
+    image.src = url;
+  });
 }
 
 /** An interactive Mapbox GL map that redraws whenever `style` changes. */
-export default function ThemeMap({ style, target }: ThemeMapProps) {
+export default function ThemeMap({ style, target, images }: ThemeMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapboxMap | null>(null);
   const styleRef = useRef(style);
@@ -34,10 +62,17 @@ export default function ThemeMap({ style, target }: ThemeMapProps) {
   const targetRef = useRef(target);
   const [zoom, setZoom] = useState(START.zoom);
   const [error, setError] = useState<string | null>(null);
+  // Drawn textures by name, and the SVG each was drawn from.
+  const rasters = useRef(new Map<string, { svg: string; data: ImageData }>());
+  const readyRef = useRef<Promise<MapboxMap> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let map: MapboxMap | null = null;
+    let resolveReady: (map: MapboxMap) => void = () => undefined;
+    readyRef.current = new Promise((resolve) => {
+      resolveReady = resolve;
+    });
 
     void import("mapbox-gl").then(({ default: mapboxgl }) => {
       if (cancelled || !containerRef.current) return;
@@ -55,6 +90,13 @@ export default function ThemeMap({ style, target }: ThemeMapProps) {
         attributionControl: true,
       });
       map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-left");
+      // A style reload drops added images; put the textures straight back.
+      map.on("styleimagemissing", (event: { id: string }) => {
+        const raster = rasters.current.get(event.id);
+        if (raster && !map!.hasImage(event.id)) {
+          map!.addImage(event.id, raster.data, { pixelRatio: PIXEL_RATIO });
+        }
+      });
       map.on("zoom", () => setZoom(map!.getZoom()));
       map.on("error", (event) => {
         const message = event.error?.message ?? "";
@@ -62,6 +104,7 @@ export default function ThemeMap({ style, target }: ThemeMapProps) {
         if (message && !/image|sprite/i.test(message)) setError(message);
       });
       mapRef.current = map;
+      resolveReady(map);
     });
 
     return () => {
@@ -88,10 +131,34 @@ export default function ThemeMap({ style, target }: ThemeMapProps) {
 
   useEffect(() => {
     styleRef.current = style;
-    // Only paint colours differ between styles, so the map updates in place
-    // and keeps its position.
-    mapRef.current?.setStyle(style as never);
-  }, [style]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        // Textures are drawn and added before the style that uses them, so
+        // the map never shows a gap where a texture should be.
+        for (const [name, svg] of Object.entries(images ?? {})) {
+          if (rasters.current.get(name)?.svg === svg) continue;
+          rasters.current.set(name, { svg, data: await rasterise(svg) });
+        }
+        const map = await readyRef.current;
+        if (cancelled || !map) return;
+        for (const [name, raster] of rasters.current) {
+          if (!(name in (images ?? {}))) continue;
+          if (map.hasImage(name)) map.removeImage(name);
+          map.addImage(name, raster.data, { pixelRatio: PIXEL_RATIO });
+        }
+        // Only paint properties differ between styles, so the map updates in
+        // place and keeps its position.
+        map.setStyle(style as never);
+        setError(null);
+      } catch (caught) {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : "The texture could not be drawn.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [style, images]);
 
   if (!MAPBOX_TOKEN) {
     return (

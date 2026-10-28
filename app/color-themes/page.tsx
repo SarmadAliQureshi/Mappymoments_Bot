@@ -1,5 +1,6 @@
 "use client";
 
+import { strToU8, zipSync } from "fflate";
 import { useEffect, useMemo, useState } from "react";
 import { Segmented } from "@/components/PromptInput";
 import PlaceSearch from "@/components/themes/PlaceSearch";
@@ -10,11 +11,45 @@ import {
   BASE_STYLE,
   applyMapping,
   slugify,
+  validateStyle,
   type ColorMapping,
 } from "@/lib/themes/theme";
+import {
+  PATTERN_TARGETS,
+  applyPatterns,
+  checkSvg,
+  getTarget,
+  patternName,
+  type Pattern,
+  type PatternTargetId,
+} from "@/lib/themes/patterns";
 import { parseColor, toHex } from "@/lib/themes/colors";
 
 const STORAGE_KEY = "color-themes";
+const PATTERNS_KEY = "color-themes-patterns";
+
+// Sprite images the base style already uses. They are bundled so an
+// uploaded package is complete ("circle" is the one we do not have a file for).
+const BASE_SPRITE_IMAGES = [
+  "airport", "black-pattern", "city-small", "fdddbrown", "golf", "park-2", "peak",
+];
+
+/** The tile size written in an SVG's opening tag. */
+function svgSize(svg: string): number {
+  const open = svg.slice(0, svg.indexOf(">"));
+  return Number(/\swidth\s*=\s*["']?(\d+(?:\.\d+)?)/.exec(open)?.[1] ?? 128);
+}
+
+function saveFile(name: string, data: BlobPart, type: string) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
 interface Theme {
   /** The request the theme was first made from. */
@@ -26,7 +61,7 @@ interface Theme {
 }
 
 // Kept outside the component so the theme survives switching tabs.
-const saved: { theme: Theme | null } = { theme: null };
+const saved: { theme: Theme | null; patterns: Pattern[] } = { theme: null, patterns: [] };
 
 const primaryButton =
   "rounded-xl bg-terracotta px-5 py-3 text-base font-bold text-white transition hover:bg-terracotta-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite disabled:cursor-not-allowed disabled:opacity-50";
@@ -46,13 +81,21 @@ export default function ColorThemesPage() {
   const [restored, setRestored] = useState(saved.theme !== null);
   const [found, setFound] = useState<string | null>(null);
   const [target, setTarget] = useState<MapTarget | null>(null);
+  const [patterns, setPatterns] = useState<Pattern[]>(saved.patterns);
+  const [patternText, setPatternText] = useState("");
+  const [patternTarget, setPatternTarget] = useState<"auto" | PatternTargetId>("auto");
+  const [patternBusy, setPatternBusy] = useState(false);
+  const [patternError, setPatternError] = useState<string | null>(null);
 
   useEffect(() => {
     if (restored) return;
     let cancelled = false;
-    void loadState<Theme>(STORAGE_KEY).then((stored) => {
+    void loadState<Theme>(STORAGE_KEY).then(async (stored) => {
       if (cancelled) return;
       if (stored?.mapping) setTheme(stored);
+      const storedPatterns = await loadState<Pattern[]>(PATTERNS_KEY);
+      if (cancelled) return;
+      if (Array.isArray(storedPatterns)) setPatterns(storedPatterns);
       setRestored(true);
     });
     return () => {
@@ -65,17 +108,38 @@ export default function ColorThemesPage() {
     if (restored) void saveState(STORAGE_KEY, theme);
   }, [theme, restored]);
 
-  // The full style is rebuilt from the base in code; only colours can differ.
+  useEffect(() => {
+    saved.patterns = patterns;
+    if (restored) void saveState(PATTERNS_KEY, patterns);
+  }, [patterns, restored]);
+
+  // The full style is rebuilt from the base in code: only colours and the
+  // injected textures can differ.
   const generatedStyle = useMemo(
-    () => (theme ? applyMapping(theme.mapping) : null),
-    [theme],
+    () =>
+      theme || patterns.length
+        ? applyPatterns(applyMapping(theme?.mapping ?? {}), patterns)
+        : null,
+    [theme, patterns],
+  );
+  const images = useMemo(
+    () => Object.fromEntries(patterns.map((pattern) => [pattern.name, pattern.svg])),
+    [patterns],
+  );
+  const problems = useMemo(
+    () =>
+      generatedStyle
+        ? validateStyle(generatedStyle, patterns.map((pattern) => pattern.name))
+        : [],
+    [generatedStyle, patterns],
   );
   const shownStyle = view === "generated" && generatedStyle ? generatedStyle : BASE_STYLE;
   const styleJson = useMemo(
     () => (generatedStyle ? JSON.stringify(generatedStyle, null, 2) : ""),
     [generatedStyle],
   );
-  const fileName = theme ? `${slugify(theme.name)}-map-style.json` : "";
+  const styleName = theme?.name ?? (patterns.length ? "textured" : "");
+  const fileName = styleName ? `${slugify(styleName)}-map-style.json` : "";
 
   async function call(
     kind: "generate" | "refine" | "regenerate",
@@ -145,15 +209,111 @@ export default function ColorThemesPage() {
   }
 
   function download() {
-    if (!styleJson) return;
-    const url = URL.createObjectURL(new Blob([styleJson], { type: "application/json" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    if (!styleJson || problems.length) return;
+    saveFile(fileName, styleJson, "application/json");
+  }
+
+  /** Adds textures, replacing any earlier one for the same part of the map. */
+  function addPatterns(added: Omit<Pattern, "name">[], titles: string[]) {
+    setPatterns((previous) => {
+      const kept = previous.filter(
+        (pattern) => !added.some((item) => item.target === pattern.target),
+      );
+      const taken = new Set(kept.map((pattern) => pattern.name));
+      const fresh = added.map((item, index) => {
+        let name = patternName(`${item.target} ${titles[index] ?? ""}`);
+        for (let n = 2; taken.has(name); n++) name = `${name}-${n}`;
+        taken.add(name);
+        return { ...item, name };
+      });
+      return [...kept, ...fresh];
+    });
+    setView("generated");
+  }
+
+  async function generatePattern() {
+    const input = patternText.trim();
+    if (!input || patternBusy) return;
+    setPatternBusy(true);
+    setPatternError(null);
+    try {
+      const palette = BASE_COLORS.filter((entry) => entry.visibleLayers.length).map((entry) => ({
+        role: entry.roles[0],
+        color: theme?.mapping[entry.color] ?? entry.color,
+      }));
+      const response = await fetch("/api/map-patterns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: input, target: patternTarget, palette }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !Array.isArray(data?.patterns)) {
+        throw new Error(data?.error ?? "The texture could not be made. Please try again.");
+      }
+      const made = data.patterns as { target: PatternTargetId; title: string; svg: string }[];
+      addPatterns(
+        made.map((item) => ({ target: item.target, svg: item.svg, source: input })),
+        made.map((item) => item.title),
+      );
+      setPatternText("");
+    } catch (caught) {
+      setPatternError(caught instanceof Error ? caught.message : "The texture could not be made.");
+    } finally {
+      setPatternBusy(false);
+    }
+  }
+
+  async function uploadPattern(file: File | undefined) {
+    if (!file) return;
+    setPatternError(null);
+    if (patternTarget === "auto") {
+      setPatternError("Choose which part of the map the uploaded SVG is for.");
+      return;
+    }
+    const checked = checkSvg(await file.text());
+    if ("error" in checked) {
+      setPatternError(checked.error);
+      return;
+    }
+    addPatterns(
+      [{ target: patternTarget, svg: checked.svg, source: `Uploaded: ${file.name}` }],
+      [file.name.replace(/\.svg$/i, "")],
+    );
+  }
+
+  /** style.json plus every SVG it needs, laid out like a Studio download. */
+  async function downloadPackage() {
+    if (!styleJson || problems.length) return;
+    const files: Record<string, Uint8Array> = { "style.json": strToU8(styleJson) };
+    for (const pattern of patterns) {
+      files[`sprite_images/${pattern.name}.svg`] = strToU8(pattern.svg);
+    }
+    for (const name of BASE_SPRITE_IMAGES) {
+      const response = await fetch(`/style-sprite/${name}.svg`);
+      if (response.ok) files[`sprite_images/${name}.svg`] = strToU8(await response.text());
+    }
+    files["README.txt"] = strToU8(
+      [
+        `${styleName} map style`,
+        "",
+        "style.json is the complete Mapbox style. The SVGs in sprite_images are the images it",
+        "uses by name (fill-pattern, background-pattern and icon-image). A style JSON cannot",
+        "contain images, so they must be added to the style's sprite in Mapbox Studio:",
+        "",
+        "1. In Mapbox Studio, create a new style from this package (New style > Upload),",
+        "   or upload style.json.",
+        "2. Open the style's Images panel and upload every SVG in sprite_images that is not",
+        "   already listed. Keep the file names: the style refers to the images by name.",
+        "3. Publish the style.",
+        "",
+        "Textures added by AI Map Style:",
+        ...patterns.map((pattern) => `- ${pattern.name}.svg (${getTarget(pattern.target)?.label})`),
+        "",
+        'The base style also uses an image called "circle" for the large country label; it is',
+        "not included here.",
+      ].join("\n"),
+    );
+    saveFile(fileName.replace(/\.json$/, ".zip"), zipSync(files), "application/zip");
   }
 
   async function copy() {
@@ -279,11 +439,132 @@ export default function ColorThemesPage() {
         )}
       </form>
 
+      <section
+        aria-label="Textures"
+        className="rounded-xl border border-tobacco/20 bg-offwhite p-5 shadow-soft sm:p-7"
+      >
+        <h2 className={label}>Textures (SVG patterns)</h2>
+        <p className="mt-1 text-sm text-ink/70">
+          Describe a texture for an area of the map, for example brown parks
+          with small black trees spaced apart. The AI draws it as a repeating
+          SVG and puts it on that area. You can also upload an SVG you made.
+        </p>
+        <form
+          className="mt-3 flex flex-col gap-3 sm:flex-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void generatePattern();
+          }}
+        >
+          <select
+            aria-label="Part of the map"
+            value={patternTarget}
+            onChange={(event) => setPatternTarget(event.target.value as "auto" | PatternTargetId)}
+            className="rounded-xl border border-tobacco/25 bg-parchment/50 px-3 py-3 text-sm text-ink focus:border-terracotta focus:outline-none focus:ring-2 focus:ring-terracotta/25"
+          >
+            <option value="auto">Area: from my description</option>
+            {PATTERN_TARGETS.filter((item) => item.layers.length).map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={patternText}
+            maxLength={500}
+            onChange={(event) => setPatternText(event.target.value)}
+            placeholder="e.g. parks in shades of brown with black tree marks placed at a distance"
+            aria-label="Describe the texture"
+            className="min-w-0 flex-1 rounded-xl border border-tobacco/25 bg-parchment/50 px-4 py-3 text-base text-ink placeholder:text-ink/40 focus:border-terracotta focus:outline-none focus:ring-2 focus:ring-terracotta/25"
+          />
+          <button
+            type="submit"
+            disabled={patternBusy || !patternText.trim()}
+            className={primaryButton}
+          >
+            {patternBusy ? "Drawing…" : "Generate texture"}
+          </button>
+        </form>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className={`${secondaryButton} cursor-pointer focus-within:ring-2 focus-within:ring-terracotta/40`}>
+            Upload SVG
+            <input
+              type="file"
+              accept=".svg,image/svg+xml"
+              className="sr-only"
+              onChange={(event) => {
+                void uploadPattern(event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          <span className="text-sm text-ink/60">
+            Uploads go to the area chosen on the left.
+          </span>
+        </div>
+        {patternError && (
+          <p role="alert" className="mt-3 text-sm text-terracotta">
+            {patternError}
+          </p>
+        )}
+        {patterns.length > 0 && (
+          <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {patterns.map((pattern) => (
+              <li
+                key={pattern.name}
+                className="flex items-center gap-3 rounded-xl border border-tobacco/20 bg-parchment/40 p-3"
+              >
+                <span
+                  aria-hidden
+                  className="h-20 w-20 shrink-0 rounded-lg border border-tobacco/25"
+                  style={{
+                    backgroundImage: `url("data:image/svg+xml;utf8,${encodeURIComponent(pattern.svg)}")`,
+                    backgroundSize: `${svgSize(pattern.svg) / 2}px`,
+                  }}
+                />
+                <span className="min-w-0 flex-1 text-sm">
+                  <span className="block font-bold text-ink">
+                    {getTarget(pattern.target)?.label}
+                  </span>
+                  <span className="block truncate font-mono text-xs text-ink/70">
+                    {pattern.name}
+                  </span>
+                  <span className="block truncate text-xs text-ink/60" title={pattern.source}>
+                    {pattern.source}
+                  </span>
+                  <span className="mt-1 flex gap-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => saveFile(`${pattern.name}.svg`, pattern.svg, "image/svg+xml")}
+                      className="text-terracotta underline-offset-2 hover:underline"
+                    >
+                      Download SVG
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPatterns((previous) =>
+                          previous.filter((item) => item.name !== pattern.name),
+                        )
+                      }
+                      className="text-ink/60 underline-offset-2 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <section aria-label="Map preview">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-serif text-2xl font-bold text-ink">
-              {view === "generated" && theme ? theme.name : "Base style"}
+              {view === "generated" && generatedStyle ? styleName : "Base style"}
             </h2>
             <p className="text-sm text-ink/70">
               Drag to move and zoom in or out to check every level.
@@ -292,12 +573,12 @@ export default function ColorThemesPage() {
           <Segmented
             name="Style shown"
             options={[
-              { value: "generated", label: theme ? "Generated" : "Generated (none yet)" },
+              { value: "generated", label: generatedStyle ? "Generated" : "Generated (none yet)" },
               { value: "base", label: "Base" },
             ]}
-            value={theme ? view : "base"}
+            value={generatedStyle ? view : "base"}
             onChange={(next) => {
-              if (theme) setView(next);
+              if (generatedStyle) setView(next);
             }}
           />
         </div>
@@ -316,7 +597,7 @@ export default function ColorThemesPage() {
           )}
         </div>
         <div className="relative">
-          <ThemeMap style={shownStyle} target={target} />
+          <ThemeMap style={shownStyle} target={target} images={images} />
           {busy && (
             <div
               role="status"
@@ -331,7 +612,7 @@ export default function ColorThemesPage() {
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
             type="button"
-            disabled={!generatedStyle}
+            disabled={!generatedStyle || problems.length > 0}
             onClick={download}
             className={primaryButton.replace("px-5 py-3 text-base", "px-4 py-2.5 text-sm")}
           >
@@ -339,18 +620,42 @@ export default function ColorThemesPage() {
           </button>
           <button
             type="button"
-            disabled={!generatedStyle}
+            disabled={!generatedStyle || problems.length > 0}
             onClick={() => void copy()}
             className={secondaryButton}
           >
             {copied ? "Copied" : "Copy JSON"}
           </button>
+          {patterns.length > 0 && (
+            <button
+              type="button"
+              disabled={problems.length > 0}
+              onClick={() => void downloadPackage()}
+              className={secondaryButton}
+            >
+              Download package (.zip)
+            </button>
+          )}
           <p className="text-sm text-ink/60">
-            {theme
-              ? `${fileName} · the complete style, ${BASE_STYLE.layers.length} layers, ${changed} of ${BASE_COLORS.length} colours changed`
-              : "Generate a theme to enable these."}
+            {generatedStyle
+              ? `${fileName} · the complete style, ${BASE_STYLE.layers.length} layers, ${changed} of ${BASE_COLORS.length} colours changed${
+                  patterns.length ? `, ${patterns.length} texture${patterns.length === 1 ? "" : "s"}` : ""
+                }`
+              : "Generate a theme or a texture to enable these."}
           </p>
         </div>
+        {patterns.length > 0 && (
+          <p className="mt-2 text-sm text-ink/70">
+            The style JSON names its textures but cannot contain them. Use the
+            package: it holds the JSON plus every SVG it needs, ready to add
+            to the style&apos;s images in Mapbox Studio (see README.txt inside).
+          </p>
+        )}
+        {problems.length > 0 && (
+          <p role="alert" className="mt-2 text-sm text-terracotta">
+            The style did not pass its checks, so it cannot be exported: {problems[0]}
+          </p>
+        )}
       </section>
 
       <section aria-label="Palette">

@@ -34,6 +34,7 @@ export interface ColorEntry {
 }
 
 const isColorProperty = (name: string) => name.includes("color");
+export const isPatternProperty = (name: string) => name.endsWith("-pattern");
 
 // What a layer's colour is for, judged from the data and property it paints.
 function roleOf(layer: StyleLayer, property: string): string {
@@ -168,7 +169,7 @@ export function applyMapping(mapping: ColorMapping): MapStyle {
  * Confirms that `style` differs from the base in colour values only. Returns
  * a list of problems; an empty list means it is safe to use.
  */
-export function validateStyle(style: MapStyle): string[] {
+export function validateStyle(style: MapStyle, patternNames: string[] = []): string[] {
   const problems: string[] = [];
   const base = BASE_STYLE;
   if (!Array.isArray(style.layers) || style.layers.length !== base.layers.length) {
@@ -184,9 +185,25 @@ export function validateStyle(style: MapStyle): string[] {
       return;
     }
     if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
-      const keysA = Object.keys(a);
-      const keysB = Object.keys(b);
-      if (keysA.length !== keysB.length || keysA.some((key) => !(key in b))) {
+      let before = a as Record<string, unknown>;
+      let after = b as Record<string, unknown>;
+      // In a layer's paint, a texture may be added or swapped, but only for
+      // one of the textures being injected.
+      if (/^\.?layers\[\d+\]\.paint$/.test(path)) {
+        for (const key of Object.keys(after)) {
+          if (!isPatternProperty(key) || after[key] === before[key]) continue;
+          if (!patternNames.includes(after[key] as string)) {
+            problems.push(`${path}.${key}: uses an image that is not one of the textures.`);
+          }
+        }
+        const unpatterned = (object: Record<string, unknown>) =>
+          Object.fromEntries(Object.entries(object).filter(([key]) => !isPatternProperty(key)));
+        before = unpatterned(before);
+        after = unpatterned(after);
+      }
+      const keysA = Object.keys(before);
+      const keysB = Object.keys(after);
+      if (keysA.length !== keysB.length || keysA.some((key) => !(key in after))) {
         problems.push(`${path}: properties were added or removed.`);
         return;
       }
@@ -194,12 +211,7 @@ export function validateStyle(style: MapStyle): string[] {
         // Only layers[n].paint.<something>-color may hold a different colour.
         const allowed =
           colorAllowed || (/^\.?layers\[\d+\]\.paint$/.test(path) && isColorProperty(key));
-        compare(
-          (a as Record<string, unknown>)[key],
-          (b as Record<string, unknown>)[key],
-          `${path}.${key}`,
-          allowed,
-        );
+        compare(before[key], after[key], `${path}.${key}`, allowed);
       }
       return;
     }
