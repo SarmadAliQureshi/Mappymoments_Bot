@@ -214,13 +214,23 @@ export default function ColorThemesPage() {
   }
 
   /** Adds textures, replacing any earlier one for the same part of the map. */
-  function addPatterns(added: Omit<Pattern, "name">[], titles: string[]) {
+  function addPatterns(
+    added: Omit<Pattern, "name">[],
+    titles: string[],
+    edits: boolean[] = [],
+  ) {
     setPatterns((previous) => {
       const kept = previous.filter(
         (pattern) => !added.some((item) => item.target === pattern.target),
       );
       const taken = new Set(kept.map((pattern) => pattern.name));
       const fresh = added.map((item, index) => {
+        // An edited texture keeps its name, so exported styles stay stable.
+        const earlier = previous.find((pattern) => pattern.target === item.target);
+        if (edits[index] && earlier) {
+          taken.add(earlier.name);
+          return { ...item, name: earlier.name };
+        }
         let name = patternName(`${item.target} ${titles[index] ?? ""}`);
         for (let n = 2; taken.has(name); n++) name = `${name}-${n}`;
         taken.add(name);
@@ -244,16 +254,36 @@ export default function ColorThemesPage() {
       const response = await fetch("/api/map-patterns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: input, target: patternTarget, palette }),
+        body: JSON.stringify({
+          prompt: input,
+          target: patternTarget,
+          palette,
+          current: patterns.map((pattern) => ({ target: pattern.target, svg: pattern.svg })),
+        }),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok || !Array.isArray(data?.patterns)) {
         throw new Error(data?.error ?? "The texture could not be made. Please try again.");
       }
-      const made = data.patterns as { target: PatternTargetId; title: string; svg: string }[];
+      const made = data.patterns as {
+        target: PatternTargetId;
+        title: string;
+        svg: string;
+        mode: "edit" | "new";
+      }[];
       addPatterns(
-        made.map((item) => ({ target: item.target, svg: item.svg, source: input })),
+        made.map((item) => {
+          const earlier = patterns.find((pattern) => pattern.target === item.target);
+          return {
+            target: item.target,
+            svg: item.svg,
+            // Edits keep a short history of how the texture came about.
+            source:
+              item.mode === "edit" && earlier ? `${earlier.source}; then: ${input}` : input,
+          };
+        }),
         made.map((item) => item.title),
+        made.map((item) => item.mode === "edit"),
       );
       setPatternText("");
     } catch (caught) {
@@ -474,7 +504,11 @@ export default function ColorThemesPage() {
             value={patternText}
             maxLength={500}
             onChange={(event) => setPatternText(event.target.value)}
-            placeholder="e.g. parks in shades of brown with black tree marks placed at a distance"
+            placeholder={
+              patterns.length
+                ? "Describe a change (e.g. make the ship black) or a new texture"
+                : "e.g. parks in shades of brown with black tree marks placed at a distance"
+            }
             aria-label="Describe the texture"
             className="min-w-0 flex-1 rounded-xl border border-tobacco/25 bg-parchment/50 px-4 py-3 text-base text-ink placeholder:text-ink/40 focus:border-terracotta focus:outline-none focus:ring-2 focus:ring-terracotta/25"
           />

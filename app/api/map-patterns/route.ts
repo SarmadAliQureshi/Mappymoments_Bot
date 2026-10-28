@@ -16,6 +16,13 @@ interface Made {
   target: PatternTargetId;
   title: string;
   svg: string;
+  /** "edit" when an existing texture was changed rather than replaced. */
+  mode: "edit" | "new";
+}
+
+interface Current {
+  target: PatternTargetId;
+  svg: string;
 }
 
 /** Reads the model's TARGET / TITLE / <svg> blocks. */
@@ -26,8 +33,9 @@ function parseReply(reply: string, fixedTarget?: PatternTargetId): Made[] {
     const target =
       fixedTarget ?? getTarget(/TARGET\s*:\s*([\w-]+)/i.exec(block)?.[1]?.toLowerCase())?.id;
     const title = /TITLE\s*:\s*(.+)/i.exec(block)?.[1]?.trim() ?? "texture";
+    const mode = /MODE\s*:\s*edit/i.test(block) ? "edit" : "new";
     const svg = block.slice(block.indexOf("<svg"), block.lastIndexOf("</svg>") + 6);
-    if (target && svg.length > 10) made.push({ target, title, svg });
+    if (target && svg.length > 10) made.push({ target, title, svg, mode });
   }
   return made.slice(0, MAX_PATTERNS);
 }
@@ -44,6 +52,16 @@ export async function POST(request: Request) {
         )
         .slice(0, 40)
     : [];
+
+  // Textures already on the map, so a follow-up can change one of them.
+  const current: Current[] = [];
+  for (const item of Array.isArray(body.current) ? body.current.slice(0, 6) : []) {
+    const target = getTarget((item as Record<string, unknown>)?.target)?.id;
+    const svg = (item as Record<string, unknown>)?.svg;
+    if (!target || typeof svg !== "string") continue;
+    const checked = checkSvg(svg);
+    if ("svg" in checked) current.push({ target, svg: checked.svg });
+  }
 
   if (!prompt) {
     return NextResponse.json({ error: "Describe the texture you would like." }, { status: 400 });
@@ -74,18 +92,37 @@ Rules for every SVG:
 - Follow the colours and motifs in the request. Where it names none, harmonise with the current map palette below.
 - Keep the texture calm and low in contrast unless asked otherwise, so roads and labels on top stay readable.
 
-Current map palette (what each colour paints):
+${
+  current.length
+    ? `Textures already on the map:
+${current.map((item) => `TARGET: ${item.target}\n${item.svg}`).join("\n\n")}
+
+Follow-up requests usually change one of these, for example "make the ship black" or "fewer trees". In that case EDIT the existing SVG instead of drawing a new one:
+- Start from the existing SVG text and change only the elements or attributes the request is about.
+- Copy everything else exactly as it is: the base rect and its colour, the tile size and viewBox, every other shape, colour, position and size. If the request is about a symbol, the background must not change; if it is about the background, the symbols must not change.
+- Use MODE: edit for such a block, with the same TARGET.
+Draw a new texture (MODE: new) only for an area that has none, or when the request clearly asks for a new or different design.
+
+`
+    : ""
+}Current map palette (what each colour paints):
 ${palette.map((item) => `- ${item.role}: ${item.color}`).join("\n") || "- (default brown and white style)"}
 
-Reply with one block per texture and nothing else:
+Reply with one block per texture you made or changed, and nothing else:
 TARGET: <area id>
+MODE: <new or edit>
 TITLE: <two to five words>
 <svg ...>...</svg>`;
 
   try {
     let lastProblem = "The AI did not return a usable SVG.";
     for (let attempt = 0; attempt < 2; attempt++) {
-      const reply = await getProvider().writeText(system, `Request: ${prompt}`);
+      // Edits want precision more than invention.
+      const reply = await getProvider().writeText(
+        system,
+        `Request: ${prompt}`,
+        current.length ? 0.2 : 0.7,
+      );
       const made = parseReply(reply, fixed);
       const patterns: Made[] = [];
       for (const item of made) {

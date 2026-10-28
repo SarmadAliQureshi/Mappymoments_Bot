@@ -17,7 +17,7 @@ export interface VideoStatus {
 
 export interface AdProvider {
   /** Rewrites text with a language model. */
-  writeText(system: string, user: string): Promise<string>;
+  writeText(system: string, user: string, temperature?: number): Promise<string>;
   /** One image that features the products shown in the reference images. */
   generateImage(input: {
     prompt: string;
@@ -71,7 +71,7 @@ function gemini(): AdProvider {
   const client = new GoogleGenAI({ apiKey });
 
   return {
-    async writeText(system, user) {
+    async writeText(system, user, temperature = 0.7) {
       let lastError: unknown;
       for (const model of TEXT_MODELS) {
         try {
@@ -80,8 +80,8 @@ function gemini(): AdProvider {
             contents: user,
             config: {
               systemInstruction: system,
-              temperature: 0.7,
-              httpOptions: { timeout: 30_000 },
+              temperature,
+              httpOptions: { timeout: 60_000 },
             },
           });
           const text = response.text?.trim();
